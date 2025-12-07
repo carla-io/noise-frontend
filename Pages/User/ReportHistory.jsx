@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,8 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import { Video } from 'expo-av';
+import { Audio } from 'expo-av';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import API_BASE_URL from '../../utils/api';
@@ -31,12 +33,29 @@ const UserReportsScreen = ({ navigation, route }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [userId, setUserId] = useState(null);
+  const [expandedReportId, setExpandedReportId] = useState(null);
+  const [playingAudio, setPlayingAudio] = useState({});
+  const [audioStates, setAudioStates] = useState({});
   
-  const slideAnim = React.useRef(new Animated.Value(-width * 0.8)).current;
-  const overlayOpacity = React.useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(-width * 0.8)).current;
+  const overlayOpacity = useRef(new Animated.Value(0)).current;
+  const audioRefs = useRef({});
 
   useEffect(() => {
     initializeUser();
+    
+    return () => {
+      // Cleanup all audio on unmount
+      Object.values(audioRefs.current).forEach(async (sound) => {
+        if (sound) {
+          try {
+            await sound.unloadAsync();
+          } catch (e) {
+            console.error('Error unloading audio:', e);
+          }
+        }
+      });
+    };
   }, []);
 
   useEffect(() => {
@@ -56,7 +75,7 @@ const UserReportsScreen = ({ navigation, route }) => {
           [
             { 
               text: 'OK', 
-              onPress: () => navigation.navigate('Login') // Adjust navigation route as needed
+              onPress: () => navigation.navigate('Login')
             }
           ]
         );
@@ -87,10 +106,8 @@ const UserReportsScreen = ({ navigation, route }) => {
       let errorMessage = 'Failed to fetch reports. Please try again.';
       
       if (error.response) {
-        // Server responded with error
         errorMessage = error.response.data?.message || errorMessage;
       } else if (error.request) {
-        // Request made but no response
         errorMessage = 'Network error. Please check your internet connection.';
       }
       
@@ -104,6 +121,112 @@ const UserReportsScreen = ({ navigation, route }) => {
   const onRefresh = () => {
     setRefreshing(true);
     fetchReports();
+  };
+
+  const toggleReportExpansion = (reportId) => {
+    setExpandedReportId(expandedReportId === reportId ? null : reportId);
+  };
+
+  const playAudio = async (reportId, audioUrl) => {
+    try {
+      // Stop any currently playing audio
+      if (audioRefs.current[reportId]) {
+        await audioRefs.current[reportId].unloadAsync();
+        delete audioRefs.current[reportId];
+      }
+
+      // Stop all other audio
+      for (const [id, sound] of Object.entries(audioRefs.current)) {
+        if (id !== reportId) {
+          await sound.stopAsync();
+          setAudioStates(prev => ({...prev, [id]: { isPlaying: false, position: 0 }}));
+        }
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+      });
+
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: audioUrl },
+        { shouldPlay: true },
+        (status) => onPlaybackStatusUpdate(reportId, status)
+      );
+
+      audioRefs.current[reportId] = sound;
+      setPlayingAudio(prev => ({...prev, [reportId]: true}));
+      
+    } catch (error) {
+      console.error('Error playing audio:', error);
+      Alert.alert('Error', 'Failed to play audio');
+    }
+  };
+
+  const pauseAudio = async (reportId) => {
+    try {
+      const sound = audioRefs.current[reportId];
+      if (sound) {
+        await sound.pauseAsync();
+        setPlayingAudio(prev => ({...prev, [reportId]: false}));
+      }
+    } catch (error) {
+      console.error('Error pausing audio:', error);
+    }
+  };
+
+  const resumeAudio = async (reportId) => {
+    try {
+      const sound = audioRefs.current[reportId];
+      if (sound) {
+        await sound.playAsync();
+        setPlayingAudio(prev => ({...prev, [reportId]: true}));
+      }
+    } catch (error) {
+      console.error('Error resuming audio:', error);
+    }
+  };
+
+  const stopAudio = async (reportId) => {
+    try {
+      const sound = audioRefs.current[reportId];
+      if (sound) {
+        await sound.stopAsync();
+        await sound.setPositionAsync(0);
+        setPlayingAudio(prev => ({...prev, [reportId]: false}));
+        setAudioStates(prev => ({...prev, [reportId]: { isPlaying: false, position: 0 }}));
+      }
+    } catch (error) {
+      console.error('Error stopping audio:', error);
+    }
+  };
+
+  const onPlaybackStatusUpdate = (reportId, status) => {
+    if (status.isLoaded) {
+      setAudioStates(prev => ({
+        ...prev,
+        [reportId]: {
+          isPlaying: status.isPlaying,
+          position: status.positionMillis,
+          duration: status.durationMillis
+        }
+      }));
+
+      if (status.didJustFinish) {
+        setPlayingAudio(prev => ({...prev, [reportId]: false}));
+        setAudioStates(prev => ({...prev, [reportId]: { isPlaying: false, position: 0 }}));
+      }
+    }
+  };
+
+  const formatDuration = (millis) => {
+    if (!millis) return '0:00';
+    const seconds = Math.floor(millis / 1000);
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   const openDrawer = () => {
@@ -152,62 +275,176 @@ const UserReportsScreen = ({ navigation, route }) => {
     });
   };
 
-  const renderReportItem = ({ item }) => (
-    <View style={styles.reportCard}>
-      <View style={styles.reportHeader}>
-        <View style={styles.reportTitleRow}>
-          <Ionicons name="document-text" size={20} color="#D4AC0D" />
-          <Text style={styles.reportTitle}>Noise Report</Text>
-        </View>
-        <Text style={styles.reportDate}>{formatDate(item.createdAt)}</Text>
-      </View>
-      
-      <View style={styles.reportDetails}>
-        {item.reason && (
-          <View style={styles.detailRow}>
-            <Ionicons name="alert-circle" size={16} color="#8B4513" />
-            <Text style={styles.detailText}>{item.reason}</Text>
-          </View>
-        )}
-        
-        {item.location && (
-          <View style={styles.detailRow}>
-            <Ionicons name="location" size={16} color="#8B4513" />
-            <Text style={styles.detailText}>
-              {item.location.address?.street || 'Location captured'}
-            </Text>
-          </View>
-        )}
-        
-        {item.mediaType && (
-          <View style={styles.detailRow}>
-            <Ionicons 
-              name={item.mediaType === 'video' ? 'videocam' : 'mic'} 
-              size={16} 
-              color="#8B4513" 
-            />
-            <Text style={styles.detailText}>
-              {item.mediaType === 'video' ? 'Video attached' : 'Audio recording'}
-            </Text>
-          </View>
-        )}
-        
-        {item.comment && (
-          <View style={styles.descriptionContainer}>
-            <Text style={styles.descriptionLabel}>Details:</Text>
-            <Text style={styles.descriptionText}>{item.comment}</Text>
-          </View>
-        )}
-      </View>
+  const renderMediaPlayer = (item) => {
+    const isExpanded = expandedReportId === item._id || expandedReportId === item.id;
+    if (!isExpanded) return null;
 
-      <View style={styles.reportFooter}>
-        <View style={styles.statusBadge}>
-          <View style={styles.statusDot} />
-          <Text style={styles.statusText}>Submitted</Text>
+    const reportId = item._id || item.id;
+    const mediaUrl = item.mediaUrl || item.audioUrl || item.videoUrl;
+
+    if (!mediaUrl) {
+      return (
+        <View style={styles.mediaContainer}>
+          <Text style={styles.noMediaText}>No media available</Text>
+        </View>
+      );
+    }
+
+    if (item.mediaType === 'video') {
+      return (
+        <View style={styles.mediaContainer}>
+          <Video
+            source={{ uri: mediaUrl }}
+            style={styles.videoPlayer}
+            useNativeControls
+            resizeMode="contain"
+            shouldPlay={false}
+          />
+        </View>
+      );
+    } else {
+      // Audio player
+      const isPlaying = playingAudio[reportId];
+      const audioState = audioStates[reportId] || { position: 0, duration: 0 };
+      const progress = audioState.duration > 0 ? audioState.position / audioState.duration : 0;
+
+      return (
+        <View style={styles.mediaContainer}>
+          <View style={styles.audioPlayer}>
+            <View style={styles.audioControls}>
+              <TouchableOpacity
+                style={styles.playButton}
+                onPress={() => {
+                  if (!audioRefs.current[reportId]) {
+                    playAudio(reportId, mediaUrl);
+                  } else if (isPlaying) {
+                    pauseAudio(reportId);
+                  } else {
+                    resumeAudio(reportId);
+                  }
+                }}
+              >
+                <Ionicons 
+                  name={isPlaying ? 'pause' : 'play'} 
+                  size={32} 
+                  color="#fff" 
+                />
+              </TouchableOpacity>
+
+              {audioRefs.current[reportId] && (
+                <TouchableOpacity
+                  style={styles.stopButton}
+                  onPress={() => stopAudio(reportId)}
+                >
+                  <Ionicons name="stop" size={24} color="#fff" />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <View style={styles.progressContainer}>
+              <View style={styles.progressBar}>
+                <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+              </View>
+              <View style={styles.timeContainer}>
+                <Text style={styles.timeText}>
+                  {formatDuration(audioState.position)}
+                </Text>
+                <Text style={styles.timeText}>
+                  {formatDuration(audioState.duration)}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.waveformContainer}>
+              <Ionicons name="musical-notes" size={20} color="#D4AC0D" />
+              <Text style={styles.audioLabel}>Audio Recording</Text>
+            </View>
+          </View>
+        </View>
+      );
+    }
+  };
+
+  const renderReportItem = ({ item }) => {
+    const reportId = item._id || item.id;
+    const isExpanded = expandedReportId === reportId;
+    const hasMedia = item.mediaUrl || item.audioUrl || item.videoUrl;
+
+    return (
+      <View style={styles.reportCard}>
+        <TouchableOpacity 
+          onPress={() => hasMedia && toggleReportExpansion(reportId)}
+          activeOpacity={hasMedia ? 0.7 : 1}
+        >
+          <View style={styles.reportHeader}>
+            <View style={styles.reportTitleRow}>
+              <Ionicons name="document-text" size={20} color="#D4AC0D" />
+              <Text style={styles.reportTitle}>Noise Report</Text>
+              {hasMedia && (
+                <Ionicons 
+                  name={isExpanded ? 'chevron-up' : 'chevron-down'} 
+                  size={20} 
+                  color="#999" 
+                />
+              )}
+            </View>
+            <Text style={styles.reportDate}>{formatDate(item.createdAt)}</Text>
+          </View>
+        </TouchableOpacity>
+        
+        <View style={styles.reportDetails}>
+          {item.reason && (
+            <View style={styles.detailRow}>
+              <Ionicons name="alert-circle" size={16} color="#8B4513" />
+              <Text style={styles.detailText}>{item.reason}</Text>
+            </View>
+          )}
+          
+          {item.location && (
+            <View style={styles.detailRow}>
+              <Ionicons name="location" size={16} color="#8B4513" />
+              <Text style={styles.detailText}>
+                {item.location.address?.street || 'Location captured'}
+              </Text>
+            </View>
+          )}
+          
+          {item.mediaType && (
+            <TouchableOpacity 
+              style={styles.detailRow}
+              onPress={() => hasMedia && toggleReportExpansion(reportId)}
+            >
+              <Ionicons 
+                name={item.mediaType === 'video' ? 'videocam' : 'mic'} 
+                size={16} 
+                color="#8B4513" 
+              />
+              <Text style={[styles.detailText, hasMedia && styles.clickableText]}>
+                {item.mediaType === 'video' ? 'Video attached' : 'Audio recording'}
+                {hasMedia && ' - Tap to view'}
+              </Text>
+            </TouchableOpacity>
+          )}
+          
+          {item.comment && (
+            <View style={styles.descriptionContainer}>
+              <Text style={styles.descriptionLabel}>Details:</Text>
+              <Text style={styles.descriptionText}>{item.comment}</Text>
+            </View>
+          )}
+        </View>
+
+        {renderMediaPlayer(item)}
+
+        <View style={styles.reportFooter}>
+          <View style={styles.statusBadge}>
+            <View style={styles.statusDot} />
+            <Text style={styles.statusText}>Submitted</Text>
+          </View>
         </View>
       </View>
-    </View>
-  );
+    );
+  };
 
   if (loading) {
     return (
@@ -238,7 +475,6 @@ const UserReportsScreen = ({ navigation, route }) => {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#8B4513" />
       
-      {/* Header */}
       <LinearGradient colors={['#8B4513', '#654321']} style={styles.header}>
         <View style={styles.headerContent}>
           <View style={styles.headerTop}>
@@ -256,7 +492,6 @@ const UserReportsScreen = ({ navigation, route }) => {
         </View>
       </LinearGradient>
 
-      {/* Reports List */}
       {reports.length === 0 ? (
         <View style={styles.emptyContainer}>
           <View style={styles.emptyIconContainer}>
@@ -291,7 +526,6 @@ const UserReportsScreen = ({ navigation, route }) => {
         />
       )}
 
-      {/* Custom Drawer Modal */}
       <Modal 
         visible={drawerVisible} 
         transparent 
@@ -314,8 +548,6 @@ const UserReportsScreen = ({ navigation, route }) => {
     </View>
   );
 };
-
-
 
 const styles = StyleSheet.create({
   container: {
@@ -390,7 +622,8 @@ const styles = StyleSheet.create({
   reportTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#8B4513'
+    color: '#8B4513',
+    flex: 1
   },
   reportDate: {
     fontSize: 12,
@@ -412,6 +645,9 @@ const styles = StyleSheet.create({
     flex: 1,
     fontWeight: '500'
   },
+  clickableText: {
+    color: '#8B4513'
+  },
   descriptionContainer: {
     marginTop: 8,
     padding: 12,
@@ -430,6 +666,96 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#555',
     lineHeight: 20
+  },
+  mediaContainer: {
+    marginTop: 12,
+    marginBottom: 12,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#f0f0f0'
+  },
+  videoPlayer: {
+    width: '100%',
+    height: 200,
+    backgroundColor: '#000'
+  },
+  audioPlayer: {
+    padding: 16,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D4AC0D'
+  },
+  audioControls: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 16
+  },
+  playButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#8B4513',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3
+  },
+  stopButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#654321',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  progressContainer: {
+    marginBottom: 12
+  },
+  progressBar: {
+    height: 4,
+    backgroundColor: '#e0e0e0',
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginBottom: 8
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#D4AC0D',
+    borderRadius: 2
+  },
+  timeContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between'
+  },
+  timeText: {
+    fontSize: 12,
+    color: '#666'
+  },
+  waveformContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0'
+  },
+  audioLabel: {
+    fontSize: 14,
+    color: '#8B4513',
+    fontWeight: '600'
+  },
+  noMediaText: {
+    textAlign: 'center',
+    padding: 20,
+    color: '#999',
+    fontSize: 14
   },
   reportFooter: {
     flexDirection: 'row',
