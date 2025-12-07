@@ -35,6 +35,7 @@ export default function AudioRecordingScreen({ navigation }) {
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationError, setLocationError] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [noiseLevel, setNoiseLevel] = useState('');
 
   const slideAnim = useRef(new Animated.Value(-width * 0.8)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
@@ -46,6 +47,12 @@ export default function AudioRecordingScreen({ navigation }) {
   const videoRef = useRef(null);
 
   const noiseReasons = ['🔊 Loud Music', '🚗 Vehicle Noise', '🔨 Construction', '🎉 Party/Event', '🐕 Animal Noise', '🏭 Industrial', '🗣️ Shouting/Arguments', '📢 Other'];
+  
+  const noiseLevels = [
+    { value: 'green', label: 'Low', icon: 'checkmark-circle', color: '#4CAF50', bgColor: '#E8F5E9', description: 'Mild disturbance' },
+    { value: 'yellow', label: 'Medium', icon: 'warning', color: '#FFC107', bgColor: '#FFF9C4', description: 'Moderate noise' },
+    { value: 'red', label: 'High', icon: 'alert-circle', color: '#F44336', bgColor: '#FFEBEE', description: 'Severe disturbance' }
+  ];
 
   useEffect(() => {
     (async () => {
@@ -229,121 +236,120 @@ export default function AudioRecordingScreen({ navigation }) {
     ]);
   };
 
- const saveRecording = async () => {
-  if (!audioUri && !videoUri) {
-    Alert.alert('No Content', 'Please record audio or attach a video first.');
-    return;
-  }
-  if (!selectedReason) {
-    Alert.alert('Reason Required', 'Please select a reason for this noise report.');
-    return;
-  }
-
-  setIsSubmitting(true);
-
-  try {
-    // ✅ Get userId from AsyncStorage
-    const userId = await AsyncStorage.getItem('userId');
-    
-    if (!userId) {
-      Alert.alert('Authentication Error', 'Please log in again.');
-      setIsSubmitting(false);
+  const saveRecording = async () => {
+    if (!audioUri && !videoUri) {
+      Alert.alert('No Content', 'Please record audio or attach a video first.');
+      return;
+    }
+    if (!selectedReason) {
+      Alert.alert('Reason Required', 'Please select a reason for this noise report.');
+      return;
+    }
+    if (!noiseLevel) {
+      Alert.alert('Noise Level Required', 'Please select the noise level (Low/Medium/High).');
       return;
     }
 
-    // ✅ Prepare form data for multipart/form-data upload
-    const formData = new FormData();
-    
-    // ✅ Add userId FIRST (required by backend)
-    formData.append('userId', userId);
-    
-    // Add media file (audio or video)
-    const mediaUri = videoUri || audioUri;
-    const mediaType = videoUri ? 'video' : 'audio';
-    const fileExtension = mediaUri.split('.').pop();
-    const fileName = `noise_report_${Date.now()}.${fileExtension}`;
-    
-    formData.append('media', {
-      uri: mediaUri,
-      type: videoUri ? `video/${fileExtension}` : `audio/${fileExtension}`,
-      name: fileName,
-    });
+    setIsSubmitting(true);
 
-    // Add other fields
-    formData.append('reason', selectedReason);
-    formData.append('mediaType', mediaType);
-    
-    if (comment) {
-      formData.append('comment', comment);
-    }
-    
-    if (location) {
-      formData.append('location', JSON.stringify({
-        latitude: location.latitude,
-        longitude: location.longitude,
-        address: location.address,
-        timestamp: location.timestamp,
-      }));
-    }
-
-    // ✅ Send POST request to backend
-    const response = await axios.post(`${API_BASE_URL}/reports/new-report`, formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-      timeout: 60000, // 60 seconds timeout for large files
-    });
-
-    setIsSubmitting(false);
-
-    // ✅ Success - Show confirmation
-    const attachmentInfo = videoUri 
-      ? `Video: ${videoUri.split('/').pop()}`
-      : `Audio: ${formatTime(totalDuration)}`;
-
-    const locationInfo = location 
-      ? `\nLocation: ${location.address?.street || ''} ${location.address?.city || ''}\nCoordinates: ${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
-      : '\nLocation: Not provided';
-
-    const reportDetails = `Noise Report Submitted Successfully!\n\nReason: ${selectedReason}${comment ? `\nDetails: ${comment}` : ''}\n${attachmentInfo}${locationInfo}\nTimestamp: ${new Date().toLocaleString()}`;
-
-    Alert.alert('✅ Report Submitted', reportDetails, [
-      { 
-        text: 'OK', 
-        onPress: () => {
-          // Reset form after successful submission
-          setComment('');
-          setSelectedReason('');
-          sound?.unloadAsync();
-          setSound(null);
-          setAudioUri(null);
-          setVideoUri(null);
-          setAttachmentType(null);
-          setLocation(null);
-          setLocationError(null);
-          setTotalDuration(0);
-          setPlaybackPosition(0);
-        }
+    try {
+      const userId = await AsyncStorage.getItem('userId');
+      
+      if (!userId) {
+        Alert.alert('Authentication Error', 'Please log in again.');
+        setIsSubmitting(false);
+        return;
       }
-    ]);
 
-  } catch (error) {
-    setIsSubmitting(false);
-    console.error('Error submitting report:', error);
-    
-    let errorMessage = 'Failed to submit noise report. Please try again.';
-    
-    if (error.response) {
-      // Server responded with error
-      errorMessage = error.response.data?.message || errorMessage;
-    } else if (error.request) {
-      // Request made but no response
-      errorMessage = 'Network error. Please check your internet connection.';
+      const formData = new FormData();
+      
+      formData.append('userId', userId);
+      
+      const mediaUri = videoUri || audioUri;
+      const mediaType = videoUri ? 'video' : 'audio';
+      const fileExtension = mediaUri.split('.').pop();
+      const fileName = `noise_report_${Date.now()}.${fileExtension}`;
+      
+      formData.append('media', {
+        uri: mediaUri,
+        type: videoUri ? `video/${fileExtension}` : `audio/${fileExtension}`,
+        name: fileName,
+      });
+
+      formData.append('reason', selectedReason);
+      formData.append('mediaType', mediaType);
+      formData.append('noiseLevel', noiseLevel);
+      
+      if (comment) {
+        formData.append('comment', comment);
+      }
+      
+      if (location) {
+        formData.append('location', JSON.stringify({
+          latitude: location.latitude,
+          longitude: location.longitude,
+          address: location.address,
+          timestamp: location.timestamp,
+        }));
+      }
+
+      const response = await axios.post(`${API_BASE_URL}/reports/new-report`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 60000,
+      });
+
+      setIsSubmitting(false);
+
+      const attachmentInfo = videoUri 
+        ? `Video: ${videoUri.split('/').pop()}`
+        : `Audio: ${formatTime(totalDuration)}`;
+
+      const locationInfo = location 
+        ? `\nLocation: ${location.address?.street || ''} ${location.address?.city || ''}\nCoordinates: ${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
+        : '\nLocation: Not provided';
+
+      const noiseLevelInfo = noiseLevels.find(nl => nl.value === noiseLevel);
+      const noiseLevelText = `\nNoise Level: ${noiseLevelInfo?.label} (${noiseLevelInfo?.description})`;
+
+      const reportDetails = `Noise Report Submitted Successfully!\n\nReason: ${selectedReason}${comment ? `\nDetails: ${comment}` : ''}${noiseLevelText}\n${attachmentInfo}${locationInfo}\nTimestamp: ${new Date().toLocaleString()}`;
+
+      Alert.alert('✅ Report Submitted', reportDetails, [
+        { 
+          text: 'OK', 
+          onPress: () => {
+            setComment('');
+            setSelectedReason('');
+            setNoiseLevel('');
+            sound?.unloadAsync();
+            setSound(null);
+            setAudioUri(null);
+            setVideoUri(null);
+            setAttachmentType(null);
+            setLocation(null);
+            setLocationError(null);
+            setTotalDuration(0);
+            setPlaybackPosition(0);
+          }
+        }
+      ]);
+
+    } catch (error) {
+      setIsSubmitting(false);
+      console.error('Error submitting report:', error);
+      
+      let errorMessage = 'Failed to submit noise report. Please try again.';
+      
+      if (error.response) {
+        errorMessage = error.response.data?.message || errorMessage;
+      } else if (error.request) {
+        errorMessage = 'Network error. Please check your internet connection.';
+      }
+      
+      Alert.alert('❌ Submission Failed', errorMessage, [{ text: 'OK' }]);
     }
-    
-    Alert.alert('❌ Submission Failed', errorMessage, [{ text: 'OK' }]);
-  }
-};
+  };
 
   const formatTime = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
   const getDbColor = (db) => db < 50 ? '#8B7355' : db < 70 ? '#D4AC0D' : db < 85 ? '#E67E22' : '#E74C3C';
@@ -378,6 +384,41 @@ export default function AudioRecordingScreen({ navigation }) {
       </LinearGradient>
 
       <ScrollView style={s.scrollView} contentContainerStyle={{ paddingBottom: 100 }} keyboardShouldPersistTaps="handled">
+        <View style={s.section}>
+          <Text style={s.sectionTitle}>🚨 Noise Level</Text>
+          <Text style={s.sectionSubtitle}>How severe is the noise disturbance?</Text>
+          <View style={s.noiseLevelContainer}>
+            {noiseLevels.map((level) => (
+              <TouchableOpacity
+                key={level.value}
+                style={[
+                  s.noiseLevelCard,
+                  { backgroundColor: level.bgColor, borderColor: level.color },
+                  noiseLevel === level.value && s.noiseLevelCardSelected
+                ]}
+                onPress={() => setNoiseLevel(level.value)}
+              >
+                <Ionicons 
+                  name={level.icon} 
+                  size={32} 
+                  color={level.color} 
+                />
+                <Text style={[s.noiseLevelLabel, { color: level.color }]}>
+                  {level.label}
+                </Text>
+                <Text style={s.noiseLevelDesc}>
+                  {level.description}
+                </Text>
+                {noiseLevel === level.value && (
+                  <View style={[s.selectedBadge, { backgroundColor: level.color }]}>
+                    <Ionicons name="checkmark" size={16} color="#fff" />
+                  </View>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
         <View style={s.section}>
           <Text style={s.sectionTitle}>📋 Select Noise Type</Text>
           <Text style={s.sectionSubtitle}>Choose the type of noise disturbance</Text>
@@ -495,7 +536,7 @@ export default function AudioRecordingScreen({ navigation }) {
         )}
 
         {(audioUri || videoUri) && (
-          <TouchableOpacity onPress={saveRecording} style={[s.saveBtn, (!selectedReason || isSubmitting) && s.saveBtnDisabled]} disabled={!selectedReason || isSubmitting}>
+          <TouchableOpacity onPress={saveRecording} style={[s.saveBtn, (!selectedReason || !noiseLevel || isSubmitting) && s.saveBtnDisabled]} disabled={!selectedReason || !noiseLevel || isSubmitting}>
             {isSubmitting ? (
               <>
                 <ActivityIndicator size="small" color="#fff" />
@@ -525,64 +566,72 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   header: { paddingTop: getStatusBarHeight(), paddingBottom: 20, paddingHorizontal: 20 },
   headerContent: { marginTop: 10 },
-  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
   headerButton: { padding: 8 },
   headerTitle: { fontSize: 28, fontWeight: 'bold', color: '#fff', marginBottom: 5 },
   headerSubtitle: { fontSize: 14, color: '#D4AC0D' },
   scrollView: { flex: 1 },
-  section: { backgroundColor: '#fff', padding: 20, marginBottom: 15 },
+  section: { margin: 15, padding: 20, backgroundColor: '#fff', borderRadius: 12, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 3 },
   sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#8B4513', marginBottom: 5 },
   sectionSubtitle: { fontSize: 14, color: '#666', marginBottom: 15 },
+  
+  noiseLevelContainer: { flexDirection: 'row', gap: 12 },
+  noiseLevelCard: { flex: 1, padding: 16, borderRadius: 12, borderWidth: 2, alignItems: 'center', position: 'relative' },
+  noiseLevelCardSelected: { borderWidth: 3, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
+  noiseLevelLabel: { fontSize: 16, fontWeight: 'bold', marginTop: 8 },
+  noiseLevelDesc: { fontSize: 11, color: '#666', marginTop: 4, textAlign: 'center' },
+  selectedBadge: { position: 'absolute', top: 8, right: 8, width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  
   reasonGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  chip: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 20, backgroundColor: '#f0f0f0', borderWidth: 2, borderColor: '#e0e0e0' },
-  chipSelected: { backgroundColor: '#8B4513', borderColor: '#654321' },
-  chipText: { fontSize: 14, color: '#333', fontWeight: '500' },
-  chipTextSelected: { color: '#fff' },
-  input: { backgroundColor: '#f9f9f9', borderWidth: 1, borderColor: '#ddd', borderRadius: 10, padding: 12, fontSize: 14, color: '#333', minHeight: 100 },
-  charCount: { position: 'absolute', bottom: 8, right: 12, fontSize: 12, color: '#999' },
-  locationBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#8B4513', padding: 15, borderRadius: 10, gap: 10 },
-  locationBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  locationDisplay: { backgroundColor: '#f9f9f9', borderRadius: 10, padding: 15, borderWidth: 1, borderColor: '#e0e0e0' },
-  locationInfo: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10 },
-  locationAddress: { fontSize: 15, color: '#333', fontWeight: '600', marginBottom: 4 },
-  locationCoords: { fontSize: 13, color: '#666' },
-  locationActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 5 },
-  refreshBtn: { padding: 8, backgroundColor: '#f0f0f0', borderRadius: 8 },
-  removeBtn: { padding: 8, backgroundColor: '#ffe5e5', borderRadius: 8 },
-  error: { color: '#E74C3C', fontSize: 13, marginTop: 10 },
-  attachmentSelector: { flexDirection: 'row', gap: 10, paddingHorizontal: 20, marginBottom: 15 },
-  attachBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 10, gap: 8, borderWidth: 2, borderColor: '#e0e0e0' },
-  attachBtnActive: { backgroundColor: '#8B4513', borderColor: '#654321' },
-  attachBtnText: { fontSize: 14, fontWeight: '600', color: '#8B4513' },
+  chip: { paddingVertical: 10, paddingHorizontal: 16, backgroundColor: '#f0f0f0', borderRadius: 20, borderWidth: 1, borderColor: '#ddd' },
+  chipSelected: { backgroundColor: '#8B4513', borderColor: '#8B4513' },
+  chipText: { fontSize: 14, color: '#333' },
+  chipTextSelected: { color: '#fff', fontWeight: 'bold' },
+  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 12, fontSize: 14, backgroundColor: '#fff', minHeight: 100 },
+  charCount: { textAlign: 'right', fontSize: 12, color: '#999', marginTop: 5 },
+  locationBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#8B4513', padding: 15, borderRadius: 8, elevation: 2 },
+  locationBtnText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  locationDisplay: { backgroundColor: '#f9f9f9', borderRadius: 8, padding: 12, borderWidth: 1, borderColor: '#ddd' },
+  locationInfo: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+  locationAddress: { fontSize: 14, fontWeight: 'bold', color: '#333' },
+  locationCoords: { fontSize: 12, color: '#666', marginTop: 2 },
+  locationActions: { flexDirection: 'row', gap: 10 },
+  refreshBtn: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#8B4513' },
+  removeBtn: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E74C3C' },
+  error: { color: '#E74C3C', fontSize: 12, marginTop: 5 },
+  attachmentSelector: { flexDirection: 'row', marginHorizontal: 15, gap: 10, marginBottom: 15 },
+  attachBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 15, backgroundColor: '#fff', borderRadius: 10, borderWidth: 2, borderColor: '#8B4513' },
+  attachBtnActive: { backgroundColor: '#8B4513', borderColor: '#8B4513' },
+  attachBtnText: { fontSize: 16, fontWeight: 'bold', color: '#8B4513' },
   attachBtnTextActive: { color: '#fff' },
-  videoContainer: { position: 'relative', backgroundColor: '#000', borderRadius: 10, overflow: 'hidden', marginBottom: 10 },
-  video: { width: '100%', height: 200 },
-  deleteVideoBtn: { position: 'absolute', top: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
-  videoInfo: { fontSize: 12, color: '#666', fontStyle: 'italic' },
-  recordingContainer: { alignItems: 'center' },
+  videoContainer: { position: 'relative', borderRadius: 8, overflow: 'hidden', marginBottom: 10 },
+  video: { width: '100%', height: 200, backgroundColor: '#000' },
+  deleteVideoBtn: { position: 'absolute', top: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20, padding: 5 },
+  videoInfo: { fontSize: 12, color: '#666', textAlign: 'center' },
+  recordingContainer: { alignItems: 'center', paddingVertical: 20 },
   waveformContainer: { alignItems: 'center', marginBottom: 20 },
-  dbReading: { fontSize: 24, fontWeight: 'bold', marginBottom: 10 },
-  waveform: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 100, gap: 8 },
-  waveBar: { width: 6, borderRadius: 3 },
-  timerContainer: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 30 },
-  timerText: { fontSize: 32, fontWeight: 'bold', color: '#8B4513' },
-  recordingDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#E74C3C' },
-  pulsingDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#E74C3C' },
-  recordButton: { width: 100, height: 100, borderRadius: 50, alignItems: 'center', justifyContent: 'center', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 },
-  recordStatus: { fontSize: 14, color: '#666', marginTop: 20 },
-  progressContainer: { marginBottom: 20 },
-  progressBar: { height: 6, backgroundColor: '#e0e0e0', borderRadius: 3, overflow: 'hidden', marginBottom: 8 },
-  progressFill: { height: '100%', backgroundColor: '#8B4513' },
-  timeLabels: { flexDirection: 'row', justifyContent: 'space-between' },
+  dbReading: { fontSize: 32, fontWeight: 'bold', marginBottom: 15 },
+  waveform: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 80 },
+  waveBar: { width: 8, borderRadius: 4, backgroundColor: '#D4AC0D' },
+  timerContainer: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 20 },
+  timerText: { fontSize: 48, fontWeight: 'bold', color: '#8B4513' },
+  recordingDot: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#E74C3C', justifyContent: 'center', alignItems: 'center' },
+  pulsingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' },
+  recordButton: { width: 100, height: 100, borderRadius: 50, justifyContent: 'center', alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 5 },
+  recordStatus: { marginTop: 15, fontSize: 14, color: '#666', textAlign: 'center' },
+  progressContainer: { marginBottom: 15 },
+  progressBar: { height: 6, backgroundColor: '#e0e0e0', borderRadius: 3, overflow: 'hidden' },
+  progressFill: { height: '100%', backgroundColor: '#D4AC0D', borderRadius: 3 },
+  timeLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
   timeText: { fontSize: 12, color: '#666' },
-  playbackControls: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 30 },
-  restartBtn: { padding: 15, backgroundColor: '#f0f0f0', borderRadius: 25 },
-  playBtn: { padding: 20, backgroundColor: '#D4AC0D', borderRadius: 35 },
-  deleteBtn: { padding: 15, backgroundColor: '#ffe5e5', borderRadius: 25 },
-  saveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#27AE60', marginHorizontal: 20, marginVertical: 20, padding: 18, borderRadius: 12, gap: 10, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 },
-  saveBtnDisabled: { backgroundColor: '#ccc' },
+  playbackControls: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 20 },
+  restartBtn: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center' },
+  playBtn: { width: 70, height: 70, borderRadius: 35, backgroundColor: '#D4AC0D', justifyContent: 'center', alignItems: 'center', elevation: 3 },
+  deleteBtn: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center' },
+  saveBtn: { margin: 15, padding: 18, backgroundColor: '#8B4513', borderRadius: 12, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, elevation: 3 },
+  saveBtnDisabled: { backgroundColor: '#ccc', opacity: 0.6 },
   saveBtnText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
   modalContainer: { flex: 1 },
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.5)' },
-  drawerContainer: { position: 'absolute', left: 0, top: 0, bottom: 0, width: width * 0.8 },
+  drawerContainer: { position: 'absolute', left: 0, top: 0, bottom: 0, width: width * 0.8 }
 });
